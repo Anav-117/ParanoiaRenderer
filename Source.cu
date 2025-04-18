@@ -12,11 +12,14 @@
 #include <curand_kernel.h>
 #include <vector>
 #include <string>
+#include <ctime>
+#include <filesystem>
 
-#define NUM_SIMULATIONS 100
+#define NUM_FULL_SIMS 50
+#define NUM_SIMULATIONS 50
 
 HOD struct Agent {
-
+        
     float Kp = 1.0;
     float Reach = 1.0;
     float Ks = 1.0;
@@ -41,14 +44,18 @@ __global__ void ApplyPersonalityPressure(Agent* AgentField, int FieldHeight, int
 
             vec3 pos = vec3(y, x, 0);
 
-            float wieghtedDist = (AgentPos - pos).length() / AgentField[j].Reach;
+            if ((AgentPos - pos).length() > AgentField[j].Reach) {
+                continue;
+            }
+
+            float wieghtedDist = pow((AgentPos - pos).length(), 2) / AgentField[j].Reach;
 
             float personalityPressure = (AgentField[index].Kp * (AgentField[j].personality - AgentField[index].personality)) / wieghtedDist;
 
-            AgentField[index].PersonalityPressure += personalityPressure;
-            AgentField[index].InfluenceNumber += 1.0;
-            //atomicAdd((float*)(AgentField + index * sizeof(Agent) + 4 * sizeof(float)), personalityPressure);
-            //atomicAdd((float*)(AgentField + index * sizeof(Agent) + 5 * sizeof(float)), 1.0);
+            //AgentField[index].PersonalityPressure += personalityPressure;
+            //AgentField[index].InfluenceNumber += 1.0;
+            atomicAdd(&(AgentField[index].PersonalityPressure), personalityPressure);
+            atomicAdd(&(AgentField[index].InfluenceNumber), 1.0);
 
         }
     }
@@ -65,10 +72,23 @@ __global__ void ShiftPersonality(Agent* AgentField) {
 
     AgentField[j].personality += shift;
 
+    if (AgentField[j].personality < -1) {
+        AgentField[j].personality = -1;
+    }
+    if (AgentField[j].personality > 1) {
+        AgentField[j].personality = 1;
+    }
+
+    //AgentField[j].PersonalityPressure = 0.0;
+    //AgentField[j].InfluenceNumber = 1.0;
+
     return;
 }
 
 int main() {
+
+    srand(std::time(0));
+
 	// Image
 	const auto aspect_ratio = 1.0 / 1.0;
 	const int image_width = 100;
@@ -76,68 +96,77 @@ int main() {
     Agent* AgentField = nullptr;
     Agent* AgentField_debug = nullptr;
 
-    // Image File
+    for (int fullSim = 0; fullSim < NUM_FULL_SIMS; fullSim++) {
 
-    std::ofstream ImageFile_prev, ImageFile, ImageFile_diff;
-    ImageFile_prev.open("./images/0.ppm");
-    ImageFile.open("Image.ppm");
-    ImageFile_diff.open("Image_diff.ppm");
+        // Log File
 
-    ImageFile_prev << "P3\n" << image_width << " " << image_height << "\n255\n";
-    ImageFile << "P3\n" << image_width << " " << image_height << "\n255\n";
-    ImageFile_diff << "P3\n" << image_width << " " << image_height << "\n255\n";
+        std::ofstream LogFile;
+        std::filesystem::create_directory("./logs/" + std::to_string(fullSim));
+        LogFile.open("./logs/" + std::to_string(fullSim) + "/log.txt");
 
-    AgentField = (Agent*) malloc(image_height * image_width * sizeof(Agent));
-    AgentField_debug = (Agent*) malloc(image_height * image_width * sizeof(Agent));
+        // Image File
 
+        AgentField = (Agent*)malloc(image_height * image_width * sizeof(Agent));
+        AgentField_debug = (Agent*)malloc(image_height * image_width * sizeof(Agent));
 
-    for (int j = 0; j < image_height; j++) {
-        //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
-        for (int i = 0; i < image_width; i++) {
+        int paranoidAgents = 0.0;
+        int calmAgents = 0.0;
 
-            float paranoia = random_double() * 2.0 - 1.0;
-            float Kp = random_double() * 5.0;
-            float Reach = random_double() * 5.0;
-            float Ks = random_double() * 10.0;
-            AgentField[j * image_width + i].personality = paranoia;
-            AgentField[j * image_width + i].Kp = Kp;
-            AgentField[j * image_width + i].Reach = Reach;
-            AgentField[j * image_width + i].Ks = Ks;
-            AgentField[j * image_width + i].PersonalityPressure = 0.0;
-            AgentField[j * image_width + i].InfluenceNumber = 0.0;
-            AgentField_debug[j * image_width + i].personality = paranoia;
-            AgentField_debug[j * image_width + i].Kp = Kp;
-            AgentField_debug[j * image_width + i].Reach = Reach;
-            AgentField_debug[j * image_width + i].Ks = Ks;
-            AgentField_debug[j * image_width + i].PersonalityPressure = 0.0;
-            AgentField_debug[j * image_width + i].InfluenceNumber = 1.0;
-            color PixelColor = mix(color(1.0, 0.0, 0.0), color(0.0, 0.0, 1.0), AgentField[j * image_width + i].personality);
-            write_color(ImageFile_prev, PixelColor);
+        float Kp = 1.0;// random_double() * 5.0;
+        float Reach = 1.0;// random_double() * 5.0;
+        float Ks = 1.0;// random_double() * 10.0;
 
+        for (int j = 0; j < image_height; j++) {
+            //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
+            for (int i = 0; i < image_width; i++) {
+
+                float paranoia = random_double() * 2.0 - 1.0;
+                if (paranoia < 0.0) {
+                    paranoidAgents++;
+                }
+                if (paranoia > 0.0) {
+                    calmAgents++;
+                }
+                /*float Kp = random_double() * 5.0;
+                float Reach = random_double() * 5.0;
+                float Ks = random_double() * 10.0;*/
+                AgentField[j * image_width + i].personality = paranoia;
+                AgentField[j * image_width + i].Kp = Kp;
+                AgentField[j * image_width + i].Reach = Reach;
+                AgentField[j * image_width + i].Ks = Ks;
+                AgentField[j * image_width + i].PersonalityPressure = 0.0;
+                AgentField[j * image_width + i].InfluenceNumber = 0.0;
+                AgentField_debug[j * image_width + i].personality = paranoia;
+                AgentField_debug[j * image_width + i].Kp = Kp;
+                AgentField_debug[j * image_width + i].Reach = Reach;
+                AgentField_debug[j * image_width + i].Ks = Ks;
+                AgentField_debug[j * image_width + i].PersonalityPressure = 0.0;
+                AgentField_debug[j * image_width + i].InfluenceNumber = 1.0;
+
+            }
         }
-    }
 
-    Agent* KAgentField = NULL;
-    cudaMalloc(&KAgentField, image_height * image_width * sizeof(Agent));
-
-    cudaMemcpy(KAgentField, AgentField, image_height * image_width * sizeof(Agent), cudaMemcpyHostToDevice);
-
-    for (UINT t = 0; t < NUM_SIMULATIONS; t++) {
-        std::cout << "\rSimulation runs remaining: " << NUM_SIMULATIONS - t << ' ' << std::flush;
+        Agent* KAgentField = NULL;
+        cudaMalloc(&KAgentField, image_height * image_width * sizeof(Agent));
 
         cudaMemcpy(KAgentField, AgentField, image_height * image_width * sizeof(Agent), cudaMemcpyHostToDevice);
 
-        ApplyPersonalityPressure << <image_height, image_width >> > (KAgentField, image_height, image_width);
-        cudaDeviceSynchronize();
+        for (UINT t = 0; t < NUM_SIMULATIONS; t++) {
+            std::cout << "\rSimulation ID : "<< fullSim << "\tSimulation runs remaining : " << NUM_SIMULATIONS - t << ' ' << std::flush;
 
-        ShiftPersonality << <image_height, image_width >> > (KAgentField);
-        cudaDeviceSynchronize();
+            cudaMemcpy(KAgentField, AgentField, image_height * image_width * sizeof(Agent), cudaMemcpyHostToDevice);
 
-        cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
+            ApplyPersonalityPressure << <image_height, image_width >> > (KAgentField, image_height, image_width);
+            cudaDeviceSynchronize();
 
-        if (true) {
+            ShiftPersonality << <image_height, image_width >> > (KAgentField);
+            cudaDeviceSynchronize();
+
+            cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
+
             std::ofstream ImageFile_timestep;
-            ImageFile_timestep.open("./images/" + std::to_string(t + 1) + ".ppm");
+            std::filesystem::create_directory("./images/" + std::to_string(fullSim));
+            ImageFile_timestep.open("./images/" + std::to_string(fullSim) + "/" + std::to_string(t + 1) + ".ppm");
             ImageFile_timestep << "P3\n" << image_width << " " << image_height << "\n255\n";
 
             for (int j = image_height - 1; j >= 0; --j) {
@@ -150,38 +179,54 @@ int main() {
                 }
             }
 
-            //for (UINT i = 0; i < image_height * image_width; i++) {
-            //    Agent agent = AgentField[i];
-            //    continue;
-            //}
+            if (t > 0) {
+                for (UINT i = 0; i < image_height * image_width; i += 1000) {
+                    Agent agent = AgentField[i];
+                    continue;
+                }
+            }
 
             ImageFile_timestep.close();
+
+            for (int j = 0; j < image_height; j++) {
+                //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
+                for (int i = 0; i < image_width; i++) {
+                    AgentField[j * image_width + i].PersonalityPressure = 0.0;
+                    AgentField[j * image_width + i].InfluenceNumber = 1.0;
+                }
+            }
         }
-    }
 
 
-    cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
+        cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
 
-    cudaFree(KAgentField);
+        cudaFree(KAgentField);
 
-    for (int j = image_height - 1; j >= 0; --j) {
-        //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
-        for (int i = 0; i < image_width; ++i) {
+        float finalParanoia = 0.0;
+        int numAgents = 0;
 
-            color PixelColor = mix(color(1.0, 0.0, 0.0), color(0.0, 0.0, 1.0), AgentField[j * image_width + i].personality);
-
-            write_color(ImageFile, PixelColor);
-
-            PixelColor = mix(color(0.0, 0.0, 0.0), color(1.0, 1.0, 1.0), abs(AgentField_debug[j * image_width + i].personality - AgentField[j * image_width + i].personality));
-
-            write_color(ImageFile_diff, PixelColor);
+        for (int j = image_height - 1; j >= 0; --j) {
+            //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
+            for (int i = 0; i < image_width; ++i) {
+                numAgents++;
+                finalParanoia += AgentField[j * image_width + i].personality;
+            }
         }
+
+        LogFile << "SIM NUMBER - " << fullSim << "\n";
+        LogFile << "PARAMETERS - \n";
+        LogFile << "\t Kp = " << Kp << "\n";
+        LogFile << "\t Reach = " << Reach << "\n";
+        LogFile << "\t Ks = " << Ks << "\n";
+        LogFile << "PARANOID AGENTS = " << paranoidAgents << "\n";
+        LogFile << "CALM AGENTS = " << calmAgents << "\n";
+        LogFile << "FINAL TOTAL PARANOIA = " << finalParanoia << "\n";
+        LogFile << "FINAL AVG PARANOIA = " << finalParanoia / numAgents << "\n";
+
+        LogFile.close();
+
+        delete AgentField;
     }
-
-    ImageFile_prev.close();
-    ImageFile.close();
-
-    delete AgentField;
 
 	return 0;
 }
