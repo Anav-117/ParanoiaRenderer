@@ -158,6 +158,7 @@
     <CudaCompile Include="Source.cu">
       <FileType>Document</FileType>
     </CudaCompile>
+    <ClInclude Include="gif.h" />
     <ClInclude Include="Utils.cuh">
       <FileType>Document</FileType>
     </ClInclude>

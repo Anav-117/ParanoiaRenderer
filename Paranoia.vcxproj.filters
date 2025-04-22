@@ -22,5 +22,8 @@
     <ClInclude Include="Defines.cuh" />
     <ClInclude Include="Utils.cuh" />
     <ClInclude Include="Vec3.cuh" />
+    <ClInclude Include="gif.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
 </Project>

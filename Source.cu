@@ -14,6 +14,8 @@
 #include <string>
 #include <ctime>
 #include <filesystem>
+#include "gif.h"
+#include <math.h>
 
 #define NUM_FULL_SIMS 50
 #define NUM_SIMULATIONS 50
@@ -114,19 +116,28 @@ int main() {
 
         float Kp = 1.0;// random_double() * 5.0;
         float Reach = 1.0;// random_double() * 5.0;
-        float Ks = 1.0;// random_double() * 10.0;
+        float Ks = fullSim + 1.0;// random_double() * 10.0;
+
+        float center_X = 50;
+        float center_Y = 50;
 
         for (int j = 0; j < image_height; j++) {
             //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
             for (int i = 0; i < image_width; i++) {
 
-                float paranoia = random_double() * 2.0 - 1.0;
+                float paranoia = random_double();// *2.0 - 1.0;
+
+                if (std::sqrt(pow(i - center_X, 2) + pow(j - center_Y, 2)) < 10) {
+                    paranoia = -1 * paranoia;
+                }
+
                 if (paranoia < 0.0) {
                     paranoidAgents++;
                 }
                 if (paranoia > 0.0) {
                     calmAgents++;
                 }
+
                 /*float Kp = random_double() * 5.0;
                 float Reach = random_double() * 5.0;
                 float Ks = random_double() * 10.0;*/
@@ -151,41 +162,55 @@ int main() {
 
         cudaMemcpy(KAgentField, AgentField, image_height * image_width * sizeof(Agent), cudaMemcpyHostToDevice);
 
-        for (UINT t = 0; t < NUM_SIMULATIONS; t++) {
-            std::cout << "\rSimulation ID : "<< fullSim << "\tSimulation runs remaining : " << NUM_SIMULATIONS - t << ' ' << std::flush;
+        std::filesystem::create_directory("./gifs/" + std::to_string(fullSim));
+        std::string fileName = "./gifs/" + std::to_string(fullSim) + "/render.gif";
 
-            cudaMemcpy(KAgentField, AgentField, image_height * image_width * sizeof(Agent), cudaMemcpyHostToDevice);
+        GifWriter g;
+        GifBegin(&g, fileName.c_str(), image_width, image_height, 100);
 
-            ApplyPersonalityPressure << <image_height, image_width >> > (KAgentField, image_height, image_width);
-            cudaDeviceSynchronize();
+        for (int t = -1; t < NUM_SIMULATIONS; t++) {
+            if (t >= 0) {
+                std::cout << "\rSimulation ID : " << fullSim << "\tSimulation runs remaining : " << NUM_SIMULATIONS - t << ' ' << std::flush;
 
-            ShiftPersonality << <image_height, image_width >> > (KAgentField);
-            cudaDeviceSynchronize();
+                cudaMemcpy(KAgentField, AgentField, image_height * image_width * sizeof(Agent), cudaMemcpyHostToDevice);
 
-            cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
+                ApplyPersonalityPressure << <image_height, image_width >> > (KAgentField, image_height, image_width);
+                cudaDeviceSynchronize();
+
+                ShiftPersonality << <image_height, image_width >> > (KAgentField);
+                cudaDeviceSynchronize();
+
+                cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
+            }
 
             std::ofstream ImageFile_timestep;
             std::filesystem::create_directory("./images/" + std::to_string(fullSim));
             ImageFile_timestep.open("./images/" + std::to_string(fullSim) + "/" + std::to_string(t + 1) + ".ppm");
             ImageFile_timestep << "P3\n" << image_width << " " << image_height << "\n255\n";
 
+            std::vector<uint8_t> frame(image_width * image_height* 4);
+
             for (int j = image_height - 1; j >= 0; --j) {
                 //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
                 for (int i = 0; i < image_width; ++i) {
 
-                    color PixelColor = mix(color(1.0, 0.0, 0.0), color(0.0, 0.0, 1.0), AgentField[j * image_width + i].personality);
-
-                    write_color(ImageFile_timestep, PixelColor);
-                }
-            }
-
-            if (t > 0) {
-                for (UINT i = 0; i < image_height * image_width; i += 1000) {
                     Agent agent = AgentField[i];
-                    continue;
+
+                    color PixelColor = mix(color(1.0, 0.0, 0.0), color(0.0, 0.0, 1.0), (AgentField[j * image_width + i].personality + 1) / 2.0);
+
+                    color frameColor = write_color(ImageFile_timestep, PixelColor);
+
+                    frame[(j * image_width + i) * 4 + 0] = frameColor.x();
+                    frame[(j * image_width + i) * 4 + 1] = frameColor.y();
+                    frame[(j * image_width + i) * 4 + 2] = frameColor.z();
+                    frame[(j * image_width + i) * 4 + 3] = 255;
+
+
                 }
             }
 
+            GifWriteFrame(&g, frame.data(), image_width, image_height, 1);
+            
             ImageFile_timestep.close();
 
             for (int j = 0; j < image_height; j++) {
@@ -197,17 +222,18 @@ int main() {
             }
         }
 
+        GifEnd(&g);
 
-        cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
+        //cudaMemcpy(AgentField, KAgentField, image_height * image_width * sizeof(Agent), cudaMemcpyDeviceToHost);
 
         cudaFree(KAgentField);
 
         float finalParanoia = 0.0;
         int numAgents = 0;
 
-        for (int j = image_height - 1; j >= 0; --j) {
+        for (int j = 0; j < image_height; j++) {
             //std::cout << "\rScanlines remaining: " << j << ' ' << std::flush;
-            for (int i = 0; i < image_width; ++i) {
+            for (int i = 0; i < image_width; i++) {
                 numAgents++;
                 finalParanoia += AgentField[j * image_width + i].personality;
             }
